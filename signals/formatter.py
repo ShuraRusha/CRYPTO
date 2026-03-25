@@ -104,33 +104,28 @@ def format_coin_detail(result, previous_result=None):
         L.append("")
         L.append("<b>--- RSI+BB ---</b>")
         L.append(f"{confluence} ({conf_bonus:+d})")
-    L.append("")
-    L.append(f"<b>--- On-chain ({onchain_pts:+.0f} очков) ---</b>")
-    if mvrv:
-        L.append(f"MVRV: {mvrv['score']:+.0f}")
-        L.append(f"  <i>{_hint_mvrv(mvrv['score'])}</i>")
-    elif "mvrv" in missing:
-        L.append("MVRV: нет данных")
-    if sopr:
-        L.append(f"SOPR: {sopr['score']:+.0f}  (SMA7={sopr['sopr_sma']:.4f})")
-        L.append(f"  <i>{_hint_sopr(sopr['sopr_sma'])}</i>")
-    elif "sopr" in missing:
-        L.append("SOPR: нет данных")
-    if exch:
-        dr = "отток" if exch["netflow_24h"] < 0 else "приток"
-        L.append(f"Биржи: {exch['score']:+.0f}  ({dr} {abs(exch['netflow_24h']):,.0f}/24ч)")
-        L.append(f"  <i>{_hint_exch(exch['netflow_24h'])}</i>")
-    elif "exchange_flow" in missing:
-        L.append("Биржи: нет данных")
+
+    # On-chain section — show only if at least one metric is available
+    has_onchain = any([mvrv, sopr, exch])
+    if has_onchain:
+        L.append("")
+        L.append(f"<b>--- On-chain ({onchain_pts:+.0f} очков) ---</b>")
+        if mvrv:
+            L.append(f"MVRV: {mvrv['score']:+.0f}")
+            L.append(f"  <i>{_hint_mvrv(mvrv['score'])}</i>")
+        if sopr:
+            L.append(f"SOPR: {sopr['score']:+.0f}  (SMA7={sopr['sopr_sma']:.4f})")
+            L.append(f"  <i>{_hint_sopr(sopr['sopr_sma'])}</i>")
+        if exch:
+            dr = "отток" if exch["netflow_24h"] < 0 else "приток"
+            L.append(f"Биржи: {exch['score']:+.0f}  ({dr} {abs(exch['netflow_24h']):,.0f}/24ч)")
+            L.append(f"  <i>{_hint_exch(exch['netflow_24h'])}</i>")
+
     L.append("")
     L.append(f"<b>--- Деривативы ({deriv_pts:+.0f} очков) ---</b>")
     if funding:
         L.append(f"Funding: {funding['score']:+.0f}  ({funding['avg_funding_pct']:.4f}%)")
         L.append(f"  <i>{_hint_funding(funding['score'])}</i>")
-    elif "funding_rate" in missing:
-        L.append("Funding: нет данных")
-    if missing:
-        L.append(f"\nНедоступно: {', '.join(missing)}")
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     L.append(f"\n{now}")
     L.append(f"\n<b>{_forecast(score)}</b>")
@@ -160,7 +155,9 @@ def format_scan_table(results, previous_results=None):
         tech, onchain, deriv = _calc_groups(r)
         L.append(f"{i}. {z['emoji']} <b>{r['coin']}</b> {r['composite_score']:+.0f} {t}")
         L.append(f"   Тех({tech:+.0f}): RSI {rsi_s:+.0f} | MACD {macd_s:+.0f} | BB {bb_s:+.0f}")
-        L.append(f"   Он({onchain:+.0f}): MVRV {mvrv_t} | SOPR {sopr_t} | Бирж {exch_t}")
+        has_onchain = any([r.get("mvrv"), r.get("sopr"), r.get("exchange_flow")])
+        if has_onchain:
+            L.append(f"   Он({onchain:+.0f}): MVRV {mvrv_t} | SOPR {sopr_t} | Бирж {exch_t}")
         L.append(f"   Дер({deriv:+.0f}): Fund {fund_t}")
         L.append("")
     sb = [r for r in sorted_r if r["composite_score"] >= 70]
@@ -189,21 +186,70 @@ def format_top(results):
 def format_daily_digest(results, previous_results=None):
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     previous_results = previous_results or {}
-    L = [f"<b>DAILY DIGEST</b> {now}"]
+    sorted_r = sorted(results, key=lambda x: x["composite_score"], reverse=True)
+
+    bullish = [r for r in results if r["composite_score"] >= 10]
+    bearish = [r for r in results if r["composite_score"] <= -10]
+    neutral = [r for r in results if -10 < r["composite_score"] < 10]
+
+    L = [f"\U0001f4ca <b>DAILY DIGEST</b> \u2014 {now}", ""]
+
+    # Market overview
+    L.append("\U0001f30d <b>ОБЗОР РЫНКА</b>")
+    L.append(f"Монет: {len(results)}  \U0001f7e2 Бычьих: {len(bullish)}  \u26aa Нейтральных: {len(neutral)}  \U0001f534 Медвежьих: {len(bearish)}")
+
+    # Top 3 bullish
+    L.append("")
+    L.append("\U0001f4c8 <b>ТОП ПОКУПКА</b>")
+    for i, r in enumerate(sorted_r[:3], 1):
+        z = classify_zone(r["composite_score"])
+        p = previous_results.get(r["coin"])
+        t = get_trend_arrow(r["composite_score"], p.get("composite_score") if p else None)
+        L.append(f"  {i}. {z['emoji']} <b>{r['coin']}</b> {r['composite_score']:+.0f} {t}")
+
+    # Top 3 bearish
+    L.append("")
+    L.append("\U0001f4c9 <b>ТОП ПРОДАЖА</b>")
+    bottom3 = sorted_r[-3:][::-1]
+    for i, r in enumerate(bottom3, 1):
+        z = classify_zone(r["composite_score"])
+        p = previous_results.get(r["coin"])
+        t = get_trend_arrow(r["composite_score"], p.get("composite_score") if p else None)
+        L.append(f"  {i}. {z['emoji']} <b>{r['coin']}</b> {r['composite_score']:+.0f} {t}")
+
+    # 24h changes
     ch = []
     for r in results:
         p = previous_results.get(r["coin"])
         if p:
             d = r["composite_score"] - p["composite_score"]
-            if abs(d) >= 3: ch.append((r["coin"], r["composite_score"], d))
+            if abs(d) >= 5:
+                ch.append((r["coin"], r["composite_score"], d))
     if ch:
         ch.sort(key=lambda x: abs(x[2]), reverse=True)
         L.append("")
-        L.append("<b>24ч:</b>")
-        for c, s, d in ch[:8]: L.append(f"  {c}: {s:+.0f} ({d:+.0f})")
-    best = max(results, key=lambda x: x["composite_score"])
-    L.append(f"\n<b>{_forecast(best['composite_score'])}</b>")
-    L.append("\n/scan")
+        L.append("\U0001f504 <b>ИЗМЕНЕНИЯ ЗА 24Ч</b>")
+        for c, s, d in ch[:6]:
+            arrow = "\u2191" if d > 0 else "\u2193"
+            L.append(f"  {arrow} <b>{c}</b>: {s:+.0f} ({d:+.0f})")
+
+    # Strong signals
+    strong_buy = [r for r in sorted_r if r["composite_score"] >= 70]
+    strong_sell = [r for r in sorted_r if r["composite_score"] <= -70]
+    if strong_buy or strong_sell:
+        L.append("")
+        L.append("\u26a1 <b>СИЛЬНЫЕ СИГНАЛЫ</b>")
+        if strong_buy:
+            L.append(f"  \U0001f7e2 Купить: {', '.join(r['coin'] for r in strong_buy)}")
+        if strong_sell:
+            L.append(f"  \U0001f534 Продать: {', '.join(r['coin'] for r in strong_sell)}")
+
+    best = sorted_r[0]
+    L.append("")
+    L.append(f"<b>{_forecast(best['composite_score'])}</b>")
+    L.append("")
+    L.append("/scan \u2014 полный анализ  |  /coin BTC \u2014 детально")
+    L.append("\n<i>NFA/DYOR</i>")
     return "\n".join(L)
 
 def format_alert(alert, result):
