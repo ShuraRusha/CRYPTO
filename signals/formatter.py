@@ -132,39 +132,120 @@ def format_coin_detail(result, previous_result=None):
     L.append("\nNFA/DYOR")
     return "\n".join(L)
 
+def _fmt_price(price):
+    if price >= 10000:
+        return f"${price/1000:.1f}K"
+    if price >= 1000:
+        return f"${price:,.0f}"
+    if price >= 1:
+        return f"${price:.2f}"
+    return f"${price:.4f}"
+
+def _scan_hint(r):
+    """One plain-language sentence — the dominant signal for this coin."""
+    tech, onchain, deriv = _calc_groups(r)
+
+    # Confluence is always top priority
+    if r.get("confluence_flag"):
+        return r["confluence_flag"]
+
+    # Determine dominant group
+    has_onchain = any([r.get("mvrv"), r.get("sopr"), r.get("exchange_flow")])
+    dominant = "tech"
+    if has_onchain and abs(onchain) >= abs(tech):
+        dominant = "onchain"
+    if abs(deriv) > max(abs(tech), abs(onchain) if has_onchain else 0) and abs(deriv) >= 5:
+        dominant = "deriv"
+
+    if dominant == "onchain":
+        hints = []
+        exch = r.get("exchange_flow")
+        mvrv = r.get("mvrv")
+        sopr = r.get("sopr")
+        if exch and abs(exch["score"]) >= 25:
+            hints.append(_hint_exch(exch["netflow_24h"]))
+        if mvrv and abs(mvrv["score"]) >= 25:
+            hints.append(_hint_mvrv(mvrv["score"]))
+        if sopr and abs(sopr["score"]) >= 25:
+            hints.append(_hint_sopr(sopr["sopr_sma"]))
+        if hints:
+            return hints[0]
+
+    if dominant == "deriv":
+        funding = r.get("funding")
+        if funding:
+            return _hint_funding(funding["score"])
+
+    # Tech fallback
+    rsi = r.get("rsi", {})
+    bb = r.get("bb", {})
+    macd = r.get("macd", {})
+    rsi_val = rsi.get("total", rsi.get("score", 0))
+    if macd.get("cross_up"):
+        return "Бычий кросс MACD"
+    if macd.get("cross_down"):
+        return "Медвежий кросс MACD"
+    if rsi.get("divergence_label"):
+        return rsi["divergence_label"]
+    if abs(rsi_val) >= 25:
+        return _hint_rsi(rsi_val)
+    pctb = bb.get("percent_b", 0.5)
+    if abs(bb.get("score", 0)) >= 20:
+        return _hint_bb(pctb)
+    return ""
+
 def format_scan_table(results, previous_results=None):
-    now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    now = datetime.now(timezone.utc).strftime("%d %b %Y  %H:%M UTC")
     previous_results = previous_results or {}
-    L = [f"<b>MARKET SCAN</b> {now}", ""]
     sorted_r = sorted(results, key=lambda x: x["composite_score"], reverse=True)
-    for i, r in enumerate(sorted_r, 1):
+
+    bullish = sum(1 for r in results if r["composite_score"] >= 10)
+    bearish = sum(1 for r in results if r["composite_score"] <= -10)
+    neutral = len(results) - bullish - bearish
+
+    L = [
+        f"📊 <b>MARKET SCAN</b>",
+        f"<i>{now}</i>",
+        f"🟢 {bullish}  ⚪ {neutral}  🔴 {bearish}",
+        "",
+    ]
+
+    for r in sorted_r:
         z = classify_zone(r["composite_score"])
         p = previous_results.get(r["coin"])
         t = get_trend_arrow(r["composite_score"], p.get("composite_score") if p else None)
-        rsi_s = r.get("rsi", {}).get("total", r.get("rsi", {}).get("score", 0))
-        macd_s = r.get("macd", {}).get("score", 0)
-        bb_s = r.get("bb", {}).get("score", 0)
-        mvrv_s = r.get("mvrv", {}).get("score", "—") if r.get("mvrv") else "—"
-        sopr_s = r.get("sopr", {}).get("score", "—") if r.get("sopr") else "—"
-        exch_s = r.get("exchange_flow", {}).get("score", "—") if r.get("exchange_flow") else "—"
-        fund_s = r.get("funding", {}).get("score", "—") if r.get("funding") else "—"
-        mvrv_t = f"{mvrv_s:+.0f}" if isinstance(mvrv_s, (int, float)) else mvrv_s
-        sopr_t = f"{sopr_s:+.0f}" if isinstance(sopr_s, (int, float)) else sopr_s
-        exch_t = f"{exch_s:+.0f}" if isinstance(exch_s, (int, float)) else exch_s
-        fund_t = f"{fund_s:+.0f}" if isinstance(fund_s, (int, float)) else fund_s
         tech, onchain, deriv = _calc_groups(r)
-        L.append(f"{i}. {z['emoji']} <b>{r['coin']}</b> {r['composite_score']:+.0f} {t}")
-        L.append(f"   Тех({tech:+.0f}): RSI {rsi_s:+.0f} | MACD {macd_s:+.0f} | BB {bb_s:+.0f}")
+        price_str = _fmt_price(r["price"])
         has_onchain = any([r.get("mvrv"), r.get("sopr"), r.get("exchange_flow")])
+
+        # Line 1: zone emoji + coin + score + trend + price
+        L.append(f"{z['emoji']} <b>{r['coin']}</b>  {r['composite_score']:+.0f} {t}  <i>{price_str}</i>")
+
+        # Line 2: group scores
         if has_onchain:
-            L.append(f"   Он({onchain:+.0f}): MVRV {mvrv_t} | SOPR {sopr_t} | Бирж {exch_t}")
-        L.append(f"   Дер({deriv:+.0f}): Fund {fund_t}")
+            L.append(f"   📈 {tech:+.0f}  ·  ⛓ {onchain:+.0f}  ·  💹 {deriv:+.0f}")
+        else:
+            L.append(f"   📈 {tech:+.0f}  ·  💹 {deriv:+.0f}")
+
+        # Line 3: plain language hint
+        hint = _scan_hint(r)
+        if hint:
+            L.append(f"   <i>{hint}</i>")
+
         L.append("")
+
+    # Summary
     sb = [r for r in sorted_r if r["composite_score"] >= 70]
     ss = [r for r in sorted_r if r["composite_score"] <= -70]
-    if sb: L.append(f"Покупка: {', '.join(r['coin'] for r in sb)}")
-    if ss: L.append(f"Продажа: {', '.join(r['coin'] for r in ss)}")
-    if not sb and not ss: L.append("Сильных сигналов нет.")
+    if sb or ss:
+        L.append("⚡ <b>СИГНАЛЫ</b>")
+        if sb:
+            L.append(f"   🟢 Купить:   {', '.join(r['coin'] for r in sb)}")
+        if ss:
+            L.append(f"   🔴 Продать:  {', '.join(r['coin'] for r in ss)}")
+    else:
+        L.append("Сильных сигналов нет.")
+
     best = max(sorted_r, key=lambda x: x["composite_score"])
     L.append(f"\n<b>{_forecast(best['composite_score'])}</b>")
     return "\n".join(L)
