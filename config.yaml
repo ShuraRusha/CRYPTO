@@ -1,0 +1,118 @@
+# ============================================================
+# CryptoSignal Bot — Configuration v2.1
+# ============================================================
+
+# --- Tracked Assets ---
+assets:
+  - symbol: BTC/USDT
+    name: Bitcoin
+    onchain: true
+  - symbol: ETH/USDT
+    name: Ethereum
+    onchain: true
+  - symbol: SOL/USDT
+    name: Solana
+    onchain: true
+  - symbol: XRP/USDT
+    name: XRP
+    onchain: true
+  - symbol: BNB/USDT
+    name: BNB
+    onchain: true
+  - symbol: ADA/USDT
+    name: Cardano
+    onchain: true
+  - symbol: DOGE/USDT
+    name: Dogecoin
+    onchain: true
+  - symbol: AVAX/USDT
+    name: Avalanche
+    onchain: true
+  - symbol: LINK/USDT
+    name: Chainlink
+    onchain: true
+  - symbol: DOT/USDT
+    name: Polkadot
+    onchain: true
+  - symbol: NEAR/USDT
+    name: NEAR
+    onchain: true
+  - symbol: TON/USDT
+    name: Toncoin
+    onchain: true
+
+# --- Exchange Settings ---
+exchange:
+  primary: bybit
+  fallback: okx
+  timeframe: 1d
+  ohlcv_limit: 200  # Number of candles to fetch
+
+# --- Indicator Parameters ---
+indicators:
+  rsi:
+    period: 14
+    divergence_lookback: 30  # candles for divergence detection
+  macd:
+    fast: 12
+    slow: 26
+    signal: 9
+    divergence_lookback: 30
+  bollinger:
+    period: 20
+    std_dev: 2.0
+    squeeze_percentile: 20
+    squeeze_lookback: 100
+  funding:
+    avg_periods: 3  # average last 3 funding rates (24H)
+
+# --- Scoring Weights ---
+weights:
+  # Technical (30% total)
+  rsi: 0.13
+  macd: 0.09
+  bollinger: 0.08
+  # On-chain (55% total)
+  mvrv: 0.22
+  sopr: 0.12
+  exchange_flow: 0.21
+  # Derivatives (15% total)
+  funding_rate: 0.15
+
+# --- RSI-BB Confluence ---
+confluence:
+  rsi_oversold: 30
+  rsi_overbought: 70
+  bb_low_threshold: 0.2   # %B below this = BB oversold
+  bb_high_threshold: 0.8  # %B above this = BB overbought
+  confluence_bonus: 20     # bonus for RSI+BB agreement
+  conflict_penalty: 15     # penalty for RSI+BB conflict
+  squeeze_extra: 10        # extra bonus for squeeze + confluence
+
+# --- RSI Divergence Bonuses ---
+divergence:
+  rsi_bullish: 25
+  rsi_hidden_bullish: 15
+  rsi_bearish: -25
+  rsi_hidden_bearish: -15
+
+# --- Alert Zones ---
+zones:
+  strong_buy: 70
+  accumulation: 40
+  slightly_bullish: 10
+  neutral_low: -10
+  slightly_bearish: -40
+  distribution: -70
+  # Below -70 = strong sell
+
+# --- Scheduler ---
+scheduler:
+  daily_scan_utc: "00:05"      # After 1D candle close
+  daily_digest_utc: "09:00"    # Morning digest
+  funding_update_hours: 8       # Funding rate cycle
+
+# --- Telegram ---
+telegram:
+  parse_mode: HTML
+  disable_preview: true
