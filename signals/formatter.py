@@ -142,57 +142,60 @@ def _fmt_price(price):
     return f"${price:.4f}"
 
 def _scan_hint(r):
-    """One plain-language sentence — the dominant signal for this coin."""
-    tech, onchain, deriv = _calc_groups(r)
+    """One plain-language sentence — always returned for every coin."""
+    score = r["composite_score"]
 
     # Confluence is always top priority
     if r.get("confluence_flag"):
         return r["confluence_flag"]
 
-    # Determine dominant group
-    has_onchain = any([r.get("mvrv"), r.get("sopr"), r.get("exchange_flow")])
-    dominant = "tech"
-    if has_onchain and abs(onchain) >= abs(tech):
-        dominant = "onchain"
-    if abs(deriv) > max(abs(tech), abs(onchain) if has_onchain else 0) and abs(deriv) >= 5:
-        dominant = "deriv"
+    hints = []
 
-    if dominant == "onchain":
-        hints = []
-        exch = r.get("exchange_flow")
-        mvrv = r.get("mvrv")
-        sopr = r.get("sopr")
-        if exch and abs(exch["score"]) >= 25:
-            hints.append(_hint_exch(exch["netflow_24h"]))
-        if mvrv and abs(mvrv["score"]) >= 25:
-            hints.append(_hint_mvrv(mvrv["score"]))
-        if sopr and abs(sopr["score"]) >= 25:
-            hints.append(_hint_sopr(sopr["sopr_sma"]))
-        if hints:
-            return hints[0]
-
-    if dominant == "deriv":
-        funding = r.get("funding")
-        if funding:
-            return _hint_funding(funding["score"])
-
-    # Tech fallback
+    # Technical signals
     rsi = r.get("rsi", {})
     bb = r.get("bb", {})
     macd = r.get("macd", {})
     rsi_val = rsi.get("total", rsi.get("score", 0))
+
     if macd.get("cross_up"):
-        return "Бычий кросс MACD"
-    if macd.get("cross_down"):
-        return "Медвежий кросс MACD"
+        hints.append("Бычий кросс MACD")
+    elif macd.get("cross_down"):
+        hints.append("Медвежий кросс MACD")
     if rsi.get("divergence_label"):
-        return rsi["divergence_label"]
-    if abs(rsi_val) >= 25:
-        return _hint_rsi(rsi_val)
+        hints.append(rsi["divergence_label"])
+    if bb.get("squeeze"):
+        hints.append("BB Squeeze — жди резкого движения")
+    if abs(rsi_val) >= 20:
+        hints.append(_hint_rsi(rsi_val))
     pctb = bb.get("percent_b", 0.5)
-    if abs(bb.get("score", 0)) >= 20:
-        return _hint_bb(pctb)
-    return ""
+    if pctb < 0.2 or pctb > 0.8:
+        hints.append(_hint_bb(pctb))
+
+    # On-chain signals
+    exch = r.get("exchange_flow")
+    mvrv = r.get("mvrv")
+    sopr = r.get("sopr")
+    if exch and abs(exch["score"]) >= 20:
+        hints.append(_hint_exch(exch["netflow_24h"]))
+    if mvrv and abs(mvrv["score"]) >= 20:
+        hints.append(_hint_mvrv(mvrv["score"]))
+    if sopr and abs(sopr["score"]) >= 20:
+        hints.append(_hint_sopr(sopr["sopr_sma"]))
+
+    # Funding
+    funding = r.get("funding")
+    if funding and abs(funding["score"]) >= 20:
+        hints.append(_hint_funding(funding["score"]))
+
+    if hints:
+        return hints[0]
+
+    # Fallback — describe the neutral/weak state
+    if score >= 10:
+        return "Слабый бычий сигнал, выжидательная позиция"
+    if score <= -10:
+        return "Слабое медвежье давление, осторожность"
+    return "Нейтральный рынок, нет явного направления"
 
 def format_scan_table(results, previous_results=None):
     now = datetime.now(timezone.utc).strftime("%d %b %Y  %H:%M UTC")
@@ -206,7 +209,7 @@ def format_scan_table(results, previous_results=None):
     L = [
         f"📊 <b>MARKET SCAN</b>",
         f"<i>{now}</i>",
-        f"🟢 {bullish}  ⚪ {neutral}  🔴 {bearish}",
+        f"🟢 {bullish} бычьих  ·  ⚪ {neutral} нейтр.  ·  🔴 {bearish} медвежьих",
         "",
     ]
 
