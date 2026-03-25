@@ -1,0 +1,23 @@
+name: Deploy Bot
+
+on:
+  push:
+    branches: [ main ]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy to server
+        uses: appleboy/ssh-action@v1.0.0
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script: |
+            cd /root/crypto-signal-bot
+            git pull origin main
+            source venv/bin/activate
+            pip install -r requirements.txt -q
+            systemctl restart cryptobot
+            echo "Bot restarted successfully"
