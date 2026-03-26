@@ -42,6 +42,13 @@ def _hint_funding(score):
     if score > -30: return "Умеренный бычий перекос на фьючерсах"
     return "Лонги перегружены - риск ликвидаций"
 
+def _hint_fear_greed(value):
+    if value <= 25: return f"Экстремальный страх ({value}) — зона покупки"
+    if value <= 45: return f"Страх ({value}) — осторожный интерес"
+    if value <= 55: return f"Нейтральный сентимент ({value})"
+    if value <= 75: return f"Жадность ({value}) — осторожность"
+    return f"Экстремальная жадность ({value}) — риск коррекции"
+
 def _forecast(score):
     if score >= 70: return "ПРОГНОЗ (1-3 нед): Высокая вероятность роста. Зона набора позиции."
     if score >= 40: return "ПРОГНОЗ (1-2 нед): Умеренно позитивно. Можно присматриваться."
@@ -52,17 +59,27 @@ def _forecast(score):
     return "ПРОГНОЗ: Сильный сигнал на продажу. Фиксация прибыли."
 
 def _calc_groups(result):
-    w = result.get("effective_weights", {"rsi": 0.13, "macd": 0.09, "bollinger": 0.08, "mvrv": 0.22, "sopr": 0.12, "exchange_flow": 0.21, "funding_rate": 0.15})
+    w = result.get("effective_weights", {
+        "rsi": 0.10, "macd": 0.08, "bollinger": 0.07, "ema": 0.08, "stoch_rsi": 0.05,
+        "obv": 0.05, "mvrv": 0.16, "sopr": 0.09, "exchange_flow": 0.15,
+        "funding_rate": 0.12, "fear_greed": 0.05,
+    })
     rsi_s = result.get("rsi", {}).get("total", result.get("rsi", {}).get("score", 0))
     macd_s = result.get("macd", {}).get("score", 0)
     bb_s = result.get("bb", {}).get("score", 0)
-    tech = rsi_s * w.get("rsi", 0) + macd_s * w.get("macd", 0) + bb_s * w.get("bollinger", 0)
+    ema_s = result.get("ema", {}).get("score", 0) if result.get("ema") else 0
+    stoch_s = result.get("stoch_rsi", {}).get("score", 0) if result.get("stoch_rsi") else 0
+    tech = (rsi_s * w.get("rsi", 0) + macd_s * w.get("macd", 0) + bb_s * w.get("bollinger", 0)
+            + ema_s * w.get("ema", 0) + stoch_s * w.get("stoch_rsi", 0))
+    obv_s = result.get("obv", {}).get("score", 0) if result.get("obv") else 0
     mvrv_s = result.get("mvrv", {}).get("score", 0) if result.get("mvrv") else 0
     sopr_s = result.get("sopr", {}).get("score", 0) if result.get("sopr") else 0
     exch_s = result.get("exchange_flow", {}).get("score", 0) if result.get("exchange_flow") else 0
-    onchain = mvrv_s * w.get("mvrv", 0) + sopr_s * w.get("sopr", 0) + exch_s * w.get("exchange_flow", 0)
+    onchain = (mvrv_s * w.get("mvrv", 0) + sopr_s * w.get("sopr", 0)
+               + exch_s * w.get("exchange_flow", 0) + obv_s * w.get("obv", 0))
     fund_s = result.get("funding", {}).get("score", 0) if result.get("funding") else 0
-    deriv = fund_s * w.get("funding_rate", 0)
+    fg_s = result.get("fear_greed", {}).get("score", 0) if result.get("fear_greed") else 0
+    deriv = fund_s * w.get("funding_rate", 0) + fg_s * w.get("fear_greed", 0)
     return tech, onchain, deriv
 
 def format_coin_detail(result, previous_result=None):
@@ -74,62 +91,91 @@ def format_coin_detail(result, previous_result=None):
     rsi = result.get("rsi", {})
     macd = result.get("macd", {})
     bb = result.get("bb", {})
+    ema = result.get("ema")
+    stoch = result.get("stoch_rsi")
+    obv = result.get("obv")
+    adx = result.get("adx")
     mvrv = result.get("mvrv")
     sopr = result.get("sopr")
     exch = result.get("exchange_flow")
     funding = result.get("funding")
+    fear_greed = result.get("fear_greed")
     confluence = result.get("confluence_flag", "")
     conf_bonus = result.get("confluence_bonus", 0)
-    missing = result.get("missing_indicators", [])
+    adx_mult = result.get("adx_multiplier", 1.0)
     tech_pts, onchain_pts, deriv_pts = _calc_groups(result)
-    L = []
-    L.append(f"{zone['emoji']} <b>{zone['name']}</b> -- {coin}/USDT {trend}")
-    L.append(f"<b>${price:,.2f}</b> | Score: <b>{score:+.0f}</b>/100")
-    L.append("")
-    L.append(f"<b>--- Техника ({tech_pts:+.0f} очков) ---</b>")
-    rsi_val = rsi.get("total", rsi.get("score", 0))
-    L.append(f"RSI: {rsi_val:+.0f}")
-    L.append(f"  <i>{_hint_rsi(rsi_val)}</i>")
-    if rsi.get("divergence_label"):
-        L.append(f"  {rsi['divergence_label']} ({rsi['divergence_bonus']:+d})")
-    mi = "Бычий кросс" if macd.get("cross_up") else "Медвежий кросс" if macd.get("cross_down") else "Hist +" if macd.get("histogram_score", 0) > 0 else "Hist -"
-    L.append(f"MACD: {macd.get('score', 0):+.0f}  ({mi})")
-    L.append(f"  <i>{_hint_macd(mi)}</i>")
-    pctb = bb.get("percent_b", 0.5)
-    L.append(f"BB: {bb.get('score', 0):+.0f}  (%B={pctb:.2f})")
-    L.append(f"  <i>{_hint_bb(pctb)}</i>")
-    if bb.get("squeeze"):
-        L.append("  SQUEEZE -- жди резкое движение!")
-    if confluence:
-        L.append("")
-        L.append("<b>--- RSI+BB ---</b>")
-        L.append(f"{confluence} ({conf_bonus:+d})")
 
-    # On-chain section — show only if at least one metric is available
+    L = []
+    L.append(f"{zone['emoji']} <b>{zone['name']}</b> — {coin}/USDT {trend}")
+    L.append(f"<b>${price:,.2f}</b>  |  Score: <b>{score:+.0f}</b>/100")
+
+    # ADX note
+    if adx is not None:
+        adx_note = "сильный тренд" if adx >= 30 else "умеренный тренд" if adx >= 20 else "боковик — сигналы слабее"
+        L.append(f"<i>ADX {adx:.0f} — {adx_note}</i>")
+
+    # --- Техника ---
+    L.append("")
+    L.append(f"<b>📈 Техника ({tech_pts:+.0f} очков)</b>")
+
+    rsi_val = rsi.get("total", rsi.get("score", 0))
+    L.append(f"RSI: {rsi_val:+.0f}  —  <i>{_hint_rsi(rsi_val)}</i>")
+    if rsi.get("divergence_label"):
+        L.append(f"  ↳ {rsi['divergence_label']} ({rsi['divergence_bonus']:+d})")
+
+    mi = "Бычий кросс" if macd.get("cross_up") else "Медвежий кросс" if macd.get("cross_down") else "Hist +" if macd.get("histogram_score", 0) > 0 else "Hist -"
+    L.append(f"MACD: {macd.get('score', 0):+.0f}  —  <i>{_hint_macd(mi)}</i>")
+
+    pctb = bb.get("percent_b", 0.5)
+    L.append(f"BB: {bb.get('score', 0):+.0f}  (%B={pctb:.2f})  —  <i>{_hint_bb(pctb)}</i>")
+    if bb.get("squeeze"):
+        L.append("  ⚡ SQUEEZE — жди резкого движения!")
+
+    if ema:
+        L.append(f"EMA 50/200: {ema['score']:+.0f}  —  <i>{ema['regime']}</i>")
+        if ema.get("golden_cross"):
+            L.append("  ⭐ Золотой кросс!")
+        elif ema.get("death_cross"):
+            L.append("  ☠️ Мёртвый кросс!")
+
+    if stoch:
+        L.append(f"StochRSI: {stoch['score']:+.0f}  (K={stoch['k']:.0f})  —  <i>{stoch['signal']}</i>")
+
+    if obv:
+        L.append(f"OBV: {obv['score']:+.0f}  —  <i>{obv['signal']}</i>")
+
+    if confluence:
+        L.append(f"RSI+BB: <i>{confluence}</i> ({conf_bonus:+d})")
+
+    # --- On-chain ---
     has_onchain = any([mvrv, sopr, exch])
     if has_onchain:
         L.append("")
-        L.append(f"<b>--- On-chain ({onchain_pts:+.0f} очков) ---</b>")
+        L.append(f"<b>⛓ On-chain ({onchain_pts:+.0f} очков)</b>")
         if mvrv:
-            L.append(f"MVRV: {mvrv['score']:+.0f}")
-            L.append(f"  <i>{_hint_mvrv(mvrv['score'])}</i>")
+            L.append(f"MVRV: {mvrv['score']:+.0f}  —  <i>{_hint_mvrv(mvrv['score'])}</i>")
         if sopr:
-            L.append(f"SOPR: {sopr['score']:+.0f}  (SMA7={sopr['sopr_sma']:.4f})")
-            L.append(f"  <i>{_hint_sopr(sopr['sopr_sma'])}</i>")
+            L.append(f"SOPR: {sopr['score']:+.0f}  (SMA7={sopr['sopr_sma']:.4f})  —  <i>{_hint_sopr(sopr['sopr_sma'])}</i>")
         if exch:
             dr = "отток" if exch["netflow_24h"] < 0 else "приток"
-            L.append(f"Биржи: {exch['score']:+.0f}  ({dr} {abs(exch['netflow_24h']):,.0f}/24ч)")
-            L.append(f"  <i>{_hint_exch(exch['netflow_24h'])}</i>")
+            L.append(f"Биржи: {exch['score']:+.0f}  ({dr} {abs(exch['netflow_24h']):,.0f}/24ч)  —  <i>{_hint_exch(exch['netflow_24h'])}</i>")
 
+    # --- Деривативы ---
     L.append("")
-    L.append(f"<b>--- Деривативы ({deriv_pts:+.0f} очков) ---</b>")
+    L.append(f"<b>💹 Деривативы ({deriv_pts:+.0f} очков)</b>")
     if funding:
-        L.append(f"Funding: {funding['score']:+.0f}  ({funding['avg_funding_pct']:.4f}%)")
-        L.append(f"  <i>{_hint_funding(funding['score'])}</i>")
+        L.append(f"Funding: {funding['score']:+.0f}  ({funding['avg_funding_pct']:.4f}%)  —  <i>{_hint_funding(funding['score'])}</i>")
+
+    # --- Сентимент ---
+    if fear_greed:
+        L.append("")
+        L.append("<b>🌡 Сентимент рынка</b>")
+        L.append(f"Fear & Greed: {fear_greed['score']:+.0f}  —  <i>{_hint_fear_greed(fear_greed['value'])}</i>")
+
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     L.append(f"\n{now}")
     L.append(f"\n<b>{_forecast(score)}</b>")
-    L.append("\nNFA/DYOR")
+    L.append("\n<i>NFA/DYOR</i>")
     return "\n".join(L)
 
 def _fmt_price(price):
@@ -186,6 +232,29 @@ def _scan_hint(r):
     funding = r.get("funding")
     if funding and abs(funding["score"]) >= 20:
         hints.append(_hint_funding(funding["score"]))
+
+    # EMA cross signals (high priority)
+    ema = r.get("ema")
+    if ema:
+        if ema.get("golden_cross"):
+            hints.insert(0, "Золотой кросс EMA — сильный бычий сигнал")
+        elif ema.get("death_cross"):
+            hints.insert(0, "Мёртвый кросс EMA — сильный медвежий сигнал")
+
+    # StochRSI extreme signals
+    stoch = r.get("stoch_rsi")
+    if stoch and abs(stoch.get("score", 0)) >= 50:
+        hints.append(stoch["signal"])
+
+    # OBV divergence
+    obv = r.get("obv")
+    if obv and "дивергенция" in obv.get("signal", "").lower():
+        hints.append(obv["signal"])
+
+    # Fear & Greed extreme
+    fg = r.get("fear_greed")
+    if fg and abs(fg.get("score", 0)) >= 60:
+        hints.append(_hint_fear_greed(fg["value"]))
 
     if hints:
         return hints[0]

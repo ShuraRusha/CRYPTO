@@ -143,9 +143,150 @@ def score_macd(macd_data: dict, indicators: dict, config: dict) -> dict:
     }
 
 
+
 # ----------------------------------------------------------------
-# Bollinger Bands Scoring
+# EMA Cross Scoring
 # ----------------------------------------------------------------
+def score_ema_cross(ema_data: dict) -> dict:
+    """
+    Score EMA 50/200 cross and position.
+    Returns: {score, golden_cross, death_cross, regime}
+    """
+    if ema_data is None:
+        return None
+
+    golden = ema_data.get("golden_cross", False)
+    death = ema_data.get("death_cross", False)
+    fast_above = ema_data.get("fast_above_slow", False)
+    price_above_slow = ema_data.get("above_slow", False)
+    price = ema_data.get("price", 0)
+    ema_fast = ema_data.get("ema_fast", price)
+    ema_slow = ema_data.get("ema_slow", price)
+
+    if golden:
+        score = 85.0
+        regime = "Золотой кросс EMA"
+    elif death:
+        score = -85.0
+        regime = "Мёртвый кросс EMA"
+    elif fast_above and price > ema_fast:
+        # Price above both EMAs — strong bull
+        score = 65.0
+        regime = "Бычий тренд"
+    elif fast_above and price > ema_slow:
+        # Price between EMAs — moderate bull
+        score = 35.0
+        regime = "Умеренный рост"
+    elif fast_above and not price_above_slow:
+        # EMAs bullish aligned but price below slow — weak
+        score = 10.0
+        regime = "Слабый бычий"
+    elif not fast_above and price < ema_fast:
+        # Price below both EMAs — strong bear
+        score = -65.0
+        regime = "Медвежий тренд"
+    elif not fast_above and price < ema_slow:
+        score = -35.0
+        regime = "Умеренное снижение"
+    else:
+        score = -10.0
+        regime = "Слабый медвежий"
+
+    return {
+        "score": round(clamp(score), 1),
+        "golden_cross": golden,
+        "death_cross": death,
+        "regime": regime,
+        "ema_fast": round(ema_fast, 2),
+        "ema_slow": round(ema_slow, 2),
+    }
+
+
+# ----------------------------------------------------------------
+# Stochastic RSI Scoring
+# ----------------------------------------------------------------
+def score_stoch_rsi(stoch_data: dict) -> dict:
+    """
+    Score Stochastic RSI based on K/D values and crossovers.
+    Returns: {score, k, d, signal}
+    """
+    if stoch_data is None:
+        return None
+
+    k = stoch_data["k"]
+    d = stoch_data["d"]
+    k_cross_up = stoch_data.get("k_cross_up", False)
+    k_cross_down = stoch_data.get("k_cross_down", False)
+
+    # Crossover signals (strongest)
+    if k_cross_up and k < 20:
+        score = 85.0
+        signal = "Выход из перепроданности"
+    elif k_cross_up and k < 50:
+        score = 55.0
+        signal = "Бычий кросс"
+    elif k_cross_down and k > 80:
+        score = -85.0
+        signal = "Выход из перекупленности"
+    elif k_cross_down and k > 50:
+        score = -55.0
+        signal = "Медвежий кросс"
+    # Extremes without crossover
+    elif k < 20:
+        score = _interpolate(k, 0, 20, 80, 50)
+        signal = "Перепродан"
+    elif k > 80:
+        score = _interpolate(k, 80, 100, -50, -80)
+        signal = "Перекуплен"
+    # Neutral zone
+    elif k < 50:
+        score = _interpolate(k, 20, 50, 30, 0)
+        signal = "Умеренно бычий"
+    else:
+        score = _interpolate(k, 50, 80, 0, -30)
+        signal = "Умеренно медвежий"
+
+    return {
+        "score": round(clamp(score), 1),
+        "k": round(k, 2),
+        "d": round(d, 2),
+        "signal": signal,
+    }
+
+
+# ----------------------------------------------------------------
+# OBV Scoring
+# ----------------------------------------------------------------
+def score_obv(obv_data: dict) -> dict:
+    """
+    Score On-Balance Volume based on trend vs price trend.
+    Detects volume confirmation and divergence.
+    """
+    if obv_data is None:
+        return None
+
+    obv_up = obv_data.get("trend_up", False)
+    price_up = obv_data.get("price_trend_up", False)
+
+    if obv_up and price_up:
+        score = 60.0
+        signal = "Объём подтверждает рост"
+    elif obv_up and not price_up:
+        score = 40.0
+        signal = "Бычья дивергенция OBV — накопление"
+    elif not obv_up and price_up:
+        score = -40.0
+        signal = "Медвежья дивергенция OBV — распределение"
+    else:
+        score = -60.0
+        signal = "Объём подтверждает снижение"
+
+    return {
+        "score": round(clamp(score), 1),
+        "signal": signal,
+        "obv_trend_up": obv_up,
+    }
+
 def score_bollinger(bb_data: dict) -> dict:
     """
     Score Bollinger Bands based on %B position.

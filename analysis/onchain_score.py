@@ -221,3 +221,48 @@ def score_funding_rate(avg_funding: float) -> dict:
         "avg_funding_pct": round(rate, 4),
         "label": label,
     }
+
+
+# ----------------------------------------------------------------
+# Fear & Greed Index Scoring
+# ----------------------------------------------------------------
+def score_fear_greed(index_value: int) -> dict:
+    """
+    Crypto Fear & Greed Index (0-100) → Score.
+    CONTRARIAN indicator: fear = buy opportunity, greed = sell signal.
+
+    0-25   Extreme Fear  → +80 to +100 (great buying zone)
+    25-45  Fear          → +30 to +80
+    45-55  Neutral       → -20 to +30
+    55-75  Greed         → -30 to -80
+    75-100 Extreme Greed → -80 to -100 (high risk zone)
+    """
+    v = index_value
+
+    if v <= 25:
+        score = _interpolate(v, 0, 25, 100, 80)
+    elif v <= 45:
+        score = _interpolate(v, 25, 45, 80, 30)
+    elif v <= 55:
+        score = _interpolate(v, 45, 55, 30, -20)
+    elif v <= 75:
+        score = _interpolate(v, 55, 75, -30, -80)
+    else:
+        score = _interpolate(v, 75, 100, -80, -100)
+
+    if v <= 25:
+        label = "Экстремальный страх — зона покупки"
+    elif v <= 45:
+        label = "Страх — осторожный интерес"
+    elif v <= 55:
+        label = "Нейтральный сентимент"
+    elif v <= 75:
+        label = "Жадность — осторожность"
+    else:
+        label = "Экстремальная жадность — риск коррекции"
+
+    return {
+        "score": round(clamp(score), 1),
+        "value": v,
+        "label": label,
+    }

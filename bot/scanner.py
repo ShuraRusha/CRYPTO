@@ -3,6 +3,8 @@ Core scanner: orchestrates data fetching, analysis, and signal generation.
 Used by both scheduled tasks and on-demand commands.
 """
 import logging
+import urllib.request
+import json
 from typing import Optional
 
 from data.fetcher_price import PriceFetcher
@@ -14,6 +16,20 @@ from signals.classifier import AlertTrigger
 from db.storage import Storage
 
 logger = logging.getLogger(__name__)
+
+
+def fetch_fear_greed_index() -> Optional[int]:
+    """Fetch Fear & Greed index from alternative.me (free, no API key needed)."""
+    try:
+        url = "https://api.alternative.me/fng/?limit=1"
+        with urllib.request.urlopen(url, timeout=5) as resp:
+            data = json.loads(resp.read())
+            value = int(data["data"][0]["value"])
+            logger.info(f"Fear & Greed index: {value}")
+            return value
+    except Exception as e:
+        logger.warning(f"Fear & Greed fetch failed: {e}")
+        return None
 
 
 class Scanner:
@@ -40,7 +56,7 @@ class Scanner:
         self.cache = Cache(default_ttl=3600)  # 1 hour cache
         self.alert_trigger = AlertTrigger(config)
 
-    def scan_coin(self, symbol: str, coin_name: str, coin_ticker: str) -> Optional[dict]:
+    def scan_coin(self, symbol: str, coin_name: str, coin_ticker: str, fear_greed: Optional[int] = None) -> Optional[dict]:
         """Run full analysis on a single coin."""
         logger.info(f"Scanning {coin_ticker} ({symbol})...")
 
@@ -80,6 +96,10 @@ class Scanner:
         except Exception as e:
             logger.error(f"On-chain fetch error for {coin_ticker}: {e}")
 
+        # Fear & Greed (passed from scan_all, fetched once per cycle)
+        if fear_greed is not None:
+            onchain_data["fear_greed"] = fear_greed
+
         # 4. Fetch funding rate
         funding_data = {}
         try:
@@ -109,13 +129,16 @@ class Scanner:
 
     def scan_all(self) -> list[dict]:
         """Scan all configured assets. Returns list of results."""
+        # Fetch Fear & Greed once for the whole scan cycle
+        fear_greed = fetch_fear_greed_index()
+
         results = []
         for asset in self.assets:
             symbol = asset["symbol"]
             ticker = symbol.split("/")[0]
             name = asset.get("name", ticker)
-            
-            result = self.scan_coin(symbol, name, ticker)
+
+            result = self.scan_coin(symbol, name, ticker, fear_greed=fear_greed)
             if result:
                 results.append(result)
             else:

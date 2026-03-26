@@ -52,7 +52,7 @@ exchange:
 indicators:
   rsi:
     period: 14
-    divergence_lookback: 30  # candles for divergence detection
+    divergence_lookback: 30
   macd:
     fast: 12
     slow: 26
@@ -63,21 +63,36 @@ indicators:
     std_dev: 2.0
     squeeze_percentile: 20
     squeeze_lookback: 100
+  ema:
+    fast: 50
+    slow: 200
+  adx:
+    period: 14        # used as confidence multiplier only
+  stoch_rsi:
+    period: 14
+    smooth_k: 3
+    smooth_d: 3
   funding:
-    avg_periods: 3  # average last 3 funding rates (24H)
+    avg_periods: 3
 
 # --- Scoring Weights ---
 weights:
-  # Technical (30% total)
-  rsi: 0.13
-  macd: 0.09
-  bollinger: 0.08
-  # On-chain (55% total)
-  mvrv: 0.22
-  sopr: 0.12
-  exchange_flow: 0.21
-  # Derivatives (15% total)
-  funding_rate: 0.15
+  # Technical (38% total)
+  rsi: 0.10
+  macd: 0.08
+  bollinger: 0.07
+  ema: 0.08
+  stoch_rsi: 0.05
+  # Volume (5% total)
+  obv: 0.05
+  # On-chain (40% total)
+  mvrv: 0.16
+  sopr: 0.09
+  exchange_flow: 0.15
+  # Derivatives (12% total)
+  funding_rate: 0.12
+  # Sentiment (5% total)
+  fear_greed: 0.05
 
 # --- RSI-BB Confluence ---
 confluence:

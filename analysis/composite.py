@@ -6,8 +6,8 @@ Handles missing on-chain data with automatic weight redistribution.
 import logging
 from typing import Optional
 
-from analysis.technical_score import score_rsi, score_macd, score_bollinger
-from analysis.onchain_score import score_mvrv, score_sopr, score_exchange_netflow, score_funding_rate
+from analysis.technical_score import score_rsi, score_macd, score_bollinger, score_ema_cross, score_stoch_rsi, score_obv
+from analysis.onchain_score import score_mvrv, score_sopr, score_exchange_netflow, score_funding_rate, score_fear_greed
 from analysis.confluence import calculate_confluence
 
 logger = logging.getLogger(__name__)
@@ -24,19 +24,6 @@ def compute_composite(
     config: dict,
     coin: str = "BTC",
 ) -> dict:
-    """
-    Compute the final composite score for a coin.
-
-    Args:
-        indicators: dict from analysis.indicators.get_latest_indicators()
-        onchain_data: {mvrv_zscore, sopr, exchange_netflow}
-        funding_data: {avg_funding_rate} or None
-        config: full config dict
-        coin: coin ticker (e.g. "BTC")
-
-    Returns:
-        Full analysis result dict with all scores and metadata.
-    """
     weights = dict(config.get("weights", {}))
 
     # ================================================================
@@ -46,88 +33,110 @@ def compute_composite(
     macd_result = score_macd(indicators["macd"], indicators, config)
     bb_result = score_bollinger(indicators["bb"])
 
+    # New technical indicators
+    ema_result = score_ema_cross(indicators.get("ema"))
+    stoch_result = score_stoch_rsi(indicators.get("stoch_rsi"))
+    obv_result = score_obv(indicators.get("obv"))
+
+    # ADX confidence multiplier (not scored, used to scale tech signals)
+    adx_value = indicators.get("adx")
+    adx_multiplier = _calc_adx_multiplier(adx_value)
+
     # ================================================================
     # 2. ON-CHAIN SCORES (with missing data handling)
     # ================================================================
     mvrv_result = None
     sopr_result = None
     exchange_result = None
-    missing_onchain = []
+    missing = []
 
-    # MVRV Z-Score
     mvrv_z = onchain_data.get("mvrv_zscore")
     if mvrv_z is not None:
         mvrv_result = score_mvrv(mvrv_z)
     else:
-        missing_onchain.append("mvrv")
+        missing.append("mvrv")
 
-    # SOPR
     sopr_val = onchain_data.get("sopr")
     sopr_trend = onchain_data.get("sopr_trend", "unknown")
     if sopr_val is not None:
         sopr_result = score_sopr(sopr_val, sopr_trend)
     else:
-        missing_onchain.append("sopr")
+        missing.append("sopr")
 
-    # Exchange Netflow
     netflow = onchain_data.get("exchange_netflow")
     if netflow is not None:
-        exchange_result = score_exchange_netflow(
-            netflow["netflow_24h"], netflow["netflow_7d"], coin
-        )
+        exchange_result = score_exchange_netflow(netflow["netflow_24h"], netflow["netflow_7d"], coin)
     else:
-        missing_onchain.append("exchange_flow")
+        missing.append("exchange_flow")
 
     # ================================================================
-    # 3. FUNDING RATE SCORE
+    # 3. FUNDING RATE
     # ================================================================
     funding_result = None
     if funding_data and funding_data.get("avg_funding_rate") is not None:
         funding_result = score_funding_rate(funding_data["avg_funding_rate"])
     else:
-        missing_onchain.append("funding_rate")
+        missing.append("funding_rate")
 
     # ================================================================
-    # 4. WEIGHT REDISTRIBUTION for missing data
+    # 4. SENTIMENT — Fear & Greed (global, same for all coins)
     # ================================================================
-    effective_weights = _redistribute_weights(weights, missing_onchain)
+    fear_greed_result = None
+    fg_value = onchain_data.get("fear_greed")
+    if fg_value is not None:
+        fear_greed_result = score_fear_greed(int(fg_value))
+    else:
+        missing.append("fear_greed")
+
+    # Missing new tech indicators
+    if ema_result is None:
+        missing.append("ema")
+    if stoch_result is None:
+        missing.append("stoch_rsi")
+    if obv_result is None:
+        missing.append("obv")
 
     # ================================================================
-    # 5. WEIGHTED SUM
+    # 5. WEIGHT REDISTRIBUTION for missing data
     # ================================================================
-    components = {}
+    effective_weights = _redistribute_weights(weights, missing)
+
+    # ================================================================
+    # 6. WEIGHTED SUM
+    # ================================================================
     base_score = 0.0
 
-    # Technical
-    components["rsi"] = rsi_result["total"]
-    base_score += rsi_result["total"] * effective_weights.get("rsi", 0)
+    # Technical (apply ADX multiplier to reduce noise in sideways market)
+    tech_scale = adx_multiplier
+    base_score += rsi_result["total"] * effective_weights.get("rsi", 0) * tech_scale
+    base_score += macd_result["score"] * effective_weights.get("macd", 0) * tech_scale
+    base_score += bb_result["score"] * effective_weights.get("bollinger", 0) * tech_scale
 
-    components["macd"] = macd_result["score"]
-    base_score += macd_result["score"] * effective_weights.get("macd", 0)
+    if ema_result:
+        base_score += ema_result["score"] * effective_weights.get("ema", 0) * tech_scale
+    if stoch_result:
+        base_score += stoch_result["score"] * effective_weights.get("stoch_rsi", 0) * tech_scale
+    if obv_result:
+        base_score += obv_result["score"] * effective_weights.get("obv", 0)
 
-    components["bollinger"] = bb_result["score"]
-    base_score += bb_result["score"] * effective_weights.get("bollinger", 0)
-
-    # On-chain
+    # On-chain (no ADX scaling — macro data)
     if mvrv_result:
-        components["mvrv"] = mvrv_result["score"]
         base_score += mvrv_result["score"] * effective_weights.get("mvrv", 0)
-
     if sopr_result:
-        components["sopr"] = sopr_result["score"]
         base_score += sopr_result["score"] * effective_weights.get("sopr", 0)
-
     if exchange_result:
-        components["exchange_flow"] = exchange_result["score"]
         base_score += exchange_result["score"] * effective_weights.get("exchange_flow", 0)
 
     # Derivatives
     if funding_result:
-        components["funding_rate"] = funding_result["score"]
         base_score += funding_result["score"] * effective_weights.get("funding_rate", 0)
 
+    # Sentiment
+    if fear_greed_result:
+        base_score += fear_greed_result["score"] * effective_weights.get("fear_greed", 0)
+
     # ================================================================
-    # 6. RSI-BB CONFLUENCE OVERLAY
+    # 7. RSI-BB CONFLUENCE OVERLAY
     # ================================================================
     confluence_bonus, confluence_flag = calculate_confluence(
         rsi_value=indicators["rsi"],
@@ -139,46 +148,72 @@ def compute_composite(
     composite = clamp(base_score + confluence_bonus)
 
     # ================================================================
-    # 7. ASSEMBLE RESULT
+    # 8. ASSEMBLE RESULT
     # ================================================================
     return {
         "coin": coin,
         "composite_score": round(composite, 1),
         "base_score": round(base_score, 1),
-        # Individual results
+        # Technical
         "rsi": rsi_result,
         "macd": macd_result,
         "bb": bb_result,
+        "ema": ema_result,
+        "stoch_rsi": stoch_result,
+        "obv": obv_result,
+        "adx": adx_value,
+        # On-chain
         "mvrv": mvrv_result,
         "sopr": sopr_result,
         "exchange_flow": exchange_result,
+        # Derivatives
         "funding": funding_result,
+        # Sentiment
+        "fear_greed": fear_greed_result,
         # Confluence
         "confluence_bonus": confluence_bonus,
         "confluence_flag": confluence_flag,
         # Meta
-        "missing_indicators": missing_onchain,
+        "missing_indicators": missing,
         "effective_weights": effective_weights,
+        "adx_multiplier": round(adx_multiplier, 2),
         "price": float(indicators["close_series"].iloc[-1]),
     }
 
 
+def _calc_adx_multiplier(adx_value) -> float:
+    """
+    ADX confidence multiplier for technical scores.
+    Weak trend (ADX < 20) → reduce tech signal confidence.
+    Strong trend (ADX > 40) → full confidence.
+    """
+    if adx_value is None:
+        return 1.0
+    if adx_value < 15:
+        return 0.65
+    if adx_value < 20:
+        return 0.80
+    if adx_value < 30:
+        return 0.90
+    return 1.0
+
+
 def _redistribute_weights(weights: dict, missing: list) -> dict:
     """
-    Redistribute weights when on-chain indicators are missing.
-    Missing weights are distributed proportionally among remaining indicators
-    within the same group.
+    Redistribute weights when indicators are missing.
+    Missing weights distributed proportionally within same group.
     """
     if not missing:
         return dict(weights)
 
     effective = dict(weights)
-    
-    # Group definitions
+
     groups = {
-        "technical": ["rsi", "macd", "bollinger"],
+        "technical": ["rsi", "macd", "bollinger", "ema", "stoch_rsi"],
+        "volume": ["obv"],
         "onchain": ["mvrv", "sopr", "exchange_flow"],
         "derivatives": ["funding_rate"],
+        "sentiment": ["fear_greed"],
     }
 
     for group_name, group_keys in groups.items():
@@ -188,12 +223,9 @@ def _redistribute_weights(weights: dict, missing: list) -> dict:
 
         group_present = [k for k in group_keys if k not in missing]
         if not group_present:
-            # Entire group is missing → redistribute to other groups
+            # Entire group missing → redistribute to other groups
             total_missing_weight = sum(effective.get(k, 0) for k in group_missing)
-            all_present = [
-                k for k in effective
-                if k not in missing and k not in group_keys
-            ]
+            all_present = [k for k in effective if k not in missing and k not in group_keys]
             if all_present:
                 per_key = total_missing_weight / len(all_present)
                 for k in all_present:
@@ -211,11 +243,8 @@ def _redistribute_weights(weights: dict, missing: list) -> dict:
             for k in group_missing:
                 effective[k] = 0
 
-    # Log redistribution
     if missing:
-        logger.info(
-            f"Weight redistribution (missing: {missing}): "
-            f"{', '.join(f'{k}={v:.2%}' for k, v in effective.items() if v > 0)}"
-        )
+        logger.info(f"Weight redistribution (missing: {missing}): "
+                    f"{', '.join(f'{k}={v:.2%}' for k, v in effective.items() if v > 0)}")
 
     return effective
