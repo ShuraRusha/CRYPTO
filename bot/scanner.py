@@ -11,7 +11,7 @@ from data.fetcher_price import PriceFetcher
 from data.fetcher_onchain import OnchainFetcher
 from data.cache import Cache
 from analysis.indicators import get_latest_indicators
-from analysis.composite import compute_composite
+from analysis.composite import compute_composite, compute_tech_composite
 from signals.classifier import AlertTrigger
 from db.storage import Storage
 
@@ -145,6 +145,29 @@ class Scanner:
                 logger.warning(f"Scan failed for {ticker}, skipping")
 
         logger.info(f"Scan complete: {len(results)}/{len(self.assets)} coins analyzed")
+        return results
+
+    def scan_coin_4h(self, symbol: str, coin_ticker: str) -> Optional[dict]:
+        """Run 4h technical-only scan for a single coin."""
+        df = self.price_fetcher.fetch_ohlcv(symbol, timeframe="4h", limit=200)
+        if df is None or df.empty:
+            logger.warning(f"No 4h data for {symbol}")
+            return None
+        indicators = get_latest_indicators(df, self.config)
+        if indicators is None:
+            return None
+        return compute_tech_composite(indicators, coin=coin_ticker)
+
+    def scan_all_4h(self) -> list[dict]:
+        """Scan all assets on 4h timeframe (tech only)."""
+        results = []
+        for asset in self.assets:
+            symbol = asset["symbol"]
+            ticker = symbol.split("/")[0]
+            result = self.scan_coin_4h(symbol, ticker)
+            if result:
+                results.append(result)
+        logger.info(f"4h scan complete: {len(results)} coins")
         return results
 
     def get_alerts(self, results: list) -> list[tuple[dict, dict]]:

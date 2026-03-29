@@ -17,6 +17,74 @@ def clamp(value: float, lo: float = -100, hi: float = 100) -> float:
     return max(lo, min(hi, value))
 
 
+def compute_tech_composite(indicators: dict, coin: str = "") -> dict:
+    """
+    Tech-only composite score for 4h timeframe scanning.
+    No on-chain or sentiment data — just pure technicals.
+    Returns a lightweight result dict.
+    """
+    weights_4h = {
+        "rsi": 0.25,
+        "macd": 0.20,
+        "bollinger": 0.15,
+        "ema": 0.20,
+        "stoch_rsi": 0.15,
+        "obv": 0.05,
+    }
+
+    rsi_result = score_rsi(indicators["rsi"], indicators, {})
+    macd_result = score_macd(indicators["macd"], indicators, {})
+    bb_result = score_bollinger(indicators["bb"])
+    ema_result = score_ema_cross(indicators.get("ema"))
+    stoch_result = score_stoch_rsi(indicators.get("stoch_rsi"))
+    obv_result = score_obv(indicators.get("obv"))
+
+    adx_value = indicators.get("adx")
+    adx_mult = _calc_adx_multiplier(adx_value)
+
+    score = 0.0
+    score += rsi_result["total"] * weights_4h["rsi"] * adx_mult
+    score += macd_result["score"] * weights_4h["macd"] * adx_mult
+    score += bb_result["score"] * weights_4h["bollinger"] * adx_mult
+    if ema_result:
+        score += ema_result["score"] * weights_4h["ema"] * adx_mult
+    if stoch_result:
+        score += stoch_result["score"] * weights_4h["stoch_rsi"] * adx_mult
+    if obv_result:
+        score += obv_result["score"] * weights_4h["obv"]
+
+    # RSI-BB confluence overlay (no config needed — use defaults)
+    conf_config = {"confluence": {
+        "rsi_oversold": 30, "rsi_overbought": 70,
+        "bb_low_threshold": 0.2, "bb_high_threshold": 0.8,
+        "confluence_bonus": 15, "conflict_penalty": 10, "squeeze_extra": 8,
+    }}
+    confluence_bonus, confluence_flag = calculate_confluence(
+        rsi_value=indicators["rsi"],
+        percent_b=indicators["bb"]["percent_b"],
+        squeeze_active=indicators["bb"]["squeeze"],
+        config=conf_config,
+    )
+
+    final = clamp(score + confluence_bonus)
+
+    return {
+        "coin": coin,
+        "tech_score": round(final, 1),
+        "price": float(indicators["close_series"].iloc[-1]),
+        "rsi": rsi_result,
+        "macd": macd_result,
+        "bb": bb_result,
+        "ema": ema_result,
+        "stoch_rsi": stoch_result,
+        "obv": obv_result,
+        "adx": adx_value,
+        "adx_multiplier": round(adx_mult, 2),
+        "confluence_flag": confluence_flag,
+        "timeframe": "4h",
+    }
+
+
 def compute_composite(
     indicators: dict,
     onchain_data: dict,

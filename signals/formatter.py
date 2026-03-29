@@ -266,6 +266,114 @@ def _scan_hint(r):
         return "Слабое медвежье давление, осторожность"
     return "Нейтральный рынок, нет явного направления"
 
+def format_4h_scan(results_4h: list, daily_results: dict = None) -> str:
+    """
+    Format 4h technical scan.
+    daily_results: {ticker: composite_score} from last 1D scan for macro validation.
+    """
+    now = datetime.now(timezone.utc).strftime("%d %b %Y  %H:%M UTC")
+    daily_results = daily_results or {}
+    sorted_r = sorted(results_4h, key=lambda x: x["tech_score"], reverse=True)
+
+    bullish = sum(1 for r in results_4h if r["tech_score"] >= 10)
+    bearish = sum(1 for r in results_4h if r["tech_score"] <= -10)
+    neutral = len(results_4h) - bullish - bearish
+
+    L = [
+        "⚡ <b>4H ТЕХНИЧЕСКИЙ СКАН</b>",
+        f"<i>{now}</i>",
+        f"🟢 {bullish} бычьих  ·  ⚪ {neutral} нейтр.  ·  🔴 {bearish} медвежьих",
+        "",
+    ]
+
+    # Confirmed signals (both 4h tech + 1D macro agree)
+    confirmed_buy = []
+    confirmed_sell = []
+
+    for r in sorted_r:
+        coin = r["coin"]
+        score = r["tech_score"]
+        z = classify_zone(score)
+        price_str = _fmt_price(r["price"])
+
+        # 1D macro check
+        macro_score = daily_results.get(coin)
+        if macro_score is not None:
+            macro_agree = (score > 0 and macro_score > 0) or (score < 0 and macro_score < 0)
+            macro_str = f"1D: {macro_score:+.0f} {'✅' if macro_agree else '⚠️'}"
+            if macro_agree and score >= 55:
+                confirmed_buy.append(coin)
+            elif macro_agree and score <= -55:
+                confirmed_sell.append(coin)
+        else:
+            macro_str = "1D: —"
+
+        L.append(f"{z['emoji']} <b>{coin}</b>  {score:+.0f}  <i>{price_str}</i>  |  {macro_str}")
+
+        # Key signal
+        hint = _4h_hint(r)
+        if hint:
+            L.append(f"   <i>{hint}</i>")
+        L.append("")
+
+    # Confirmed signals section
+    if confirmed_buy or confirmed_sell:
+        L.append("━━━━━━━━━━━━━━━")
+        L.append("🎯 <b>ПОДТВЕРЖДЁННЫЕ СИГНАЛЫ</b>")
+        L.append("<i>4h техника + 1D макро согласны</i>")
+        if confirmed_buy:
+            L.append(f"🟢 Вход:   {', '.join(confirmed_buy)}")
+        if confirmed_sell:
+            L.append(f"🔴 Выход:  {', '.join(confirmed_sell)}")
+    else:
+        L.append("Подтверждённых сигналов нет.")
+        L.append("<i>Ждём совпадения 4h и 1D направления</i>")
+
+    return "\n".join(L)
+
+
+def _4h_hint(r: dict) -> str:
+    """Short one-liner for 4h scan — most important tech signal."""
+    ema = r.get("ema")
+    if ema:
+        if ema.get("golden_cross"):
+            return "⭐ Золотой кросс EMA на 4h!"
+        if ema.get("death_cross"):
+            return "☠️ Мёртвый кросс EMA на 4h!"
+
+    stoch = r.get("stoch_rsi")
+    if stoch:
+        if stoch.get("k", 50) < 20 and r.get("macd", {}).get("cross_up"):
+            return "StochRSI перепродан + MACD кросс вверх"
+        if stoch.get("k", 50) > 80 and r.get("macd", {}).get("cross_down"):
+            return "StochRSI перекуплен + MACD кросс вниз"
+        if stoch.get("k", 50) < 20:
+            return f"StochRSI перепродан (K={stoch['k']:.0f})"
+        if stoch.get("k", 50) > 80:
+            return f"StochRSI перекуплен (K={stoch['k']:.0f})"
+
+    if r.get("confluence_flag"):
+        return r["confluence_flag"]
+
+    macd = r.get("macd", {})
+    if macd.get("cross_up"):
+        return "MACD бычий кросс"
+    if macd.get("cross_down"):
+        return "MACD медвежий кросс"
+
+    rsi = r.get("rsi", {})
+    rsi_val = rsi.get("total", rsi.get("score", 0))
+    if abs(rsi_val) >= 30:
+        return _hint_rsi(rsi_val)
+
+    score = r.get("tech_score", 0)
+    if score >= 10:
+        return "Слабый бычий импульс на 4h"
+    if score <= -10:
+        return "Слабый медвежий импульс на 4h"
+    return "Боковик на 4h, нет сигнала"
+
+
 def format_scan_table(results, previous_results=None):
     now = datetime.now(timezone.utc).strftime("%d %b %Y  %H:%M UTC")
     previous_results = previous_results or {}

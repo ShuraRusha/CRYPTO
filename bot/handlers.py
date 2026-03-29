@@ -12,6 +12,7 @@ from signals.formatter import (
     format_scan_table,
     format_top,
     format_alert,
+    format_4h_scan,
 )
 from signals.classifier import classify_zone
 
@@ -384,7 +385,8 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "📋 <b>Команды CryptoSignal Bot</b>\n"
         "\n"
         "📊 <b>Анализ:</b>\n"
-        "  /scan — Полный скан 12 монет\n"
+        "  /scan — Полный скан (1D макро + on-chain)\n"
+        "  /scan4h — 4ч технический скан + сигналы входа\n"
         "  /coin BTC — Детальный анализ монеты\n"
         "  /top — Топ-3 бычьих и медвежьих\n"
         "\n"
@@ -397,9 +399,41 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "  /setweights RSI=13 MACD=9 ... — Изменить веса\n"
         "  /status — Статус бота\n"
         "\n"
-        "💡 <b>Примеры:</b>\n"
-        "  /coin ETH\n"
-        "  /coin SOL\n"
-        "  /setweights RSI=20 MACD=10 BB=10 MVRV=20 SOPR=10 EXCHFLOW=15 FUNDING=15"
+        "⏱ <b>Расписание:</b>\n"
+        "  00:05 UTC — 1D скан + алерты\n"
+        "  04:05, 08:05, 12:05, 16:05, 20:05 UTC — 4h скан\n"
+        "  09:00 UTC — Daily Digest"
     )
     await _send(update, text)
+
+
+# ================================================================
+# /scan4h
+# ================================================================
+async def cmd_scan4h(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """4h technical scan with two-layer signal validation."""
+    scanner = _get_scanner(context)
+    if not scanner:
+        await _send(update, "❌ Сканер не инициализирован.")
+        return
+
+    await _send(update, "⏳ Сканирую 4h таймфрейм...")
+
+    try:
+        results_4h = scanner.scan_all_4h()
+        if not results_4h:
+            await _send(update, "❌ Не удалось получить 4h данные.")
+            return
+
+        daily = scanner.storage.get_all_previous_results()
+        daily_scores = {
+            coin: data.get("composite_score", 0)
+            for coin, data in daily.items()
+        }
+
+        text = format_4h_scan(results_4h, daily_scores)
+        await _send(update, text)
+
+    except Exception as e:
+        logger.error(f"scan4h error: {e}", exc_info=True)
+        await _send(update, f"❌ Ошибка: {e}")

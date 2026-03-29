@@ -16,6 +16,7 @@ from bot.handlers import (
     cmd_setweights,
     cmd_status,
     cmd_help,
+    cmd_scan4h,
 )
 from bot.scanner import Scanner
 from bot.scheduler import BotScheduler
@@ -66,6 +67,7 @@ def create_bot(config: dict, env: dict) -> Application:
     app.add_handler(CommandHandler("setweights", cmd_setweights))
     app.add_handler(CommandHandler("status", cmd_status))
     app.add_handler(CommandHandler("help", cmd_help))
+    app.add_handler(CommandHandler("scan4h", cmd_scan4h))
 
     logger.info("Bot application created with all handlers registered")
 
@@ -84,8 +86,9 @@ def create_bot(config: dict, env: dict) -> Application:
                 text=(
                     "🤖 <b>CryptoSignal Bot запущен!</b>\n"
                     "\n"
-                    "📊 7 индикаторов │ 12 монет │ 1D таймфрейм\n"
-                    "⏱ Скан: 00:05 UTC │ Дайджест: 09:00 UTC\n"
+                    "📊 12 индикаторов │ 12 монет │ 1D + 4h таймфреймы\n"
+                    "⏱ 1D скан: 00:05 UTC │ 4h скан: 04:05, 08:05, 12:05, 16:05, 20:05 UTC\n"
+                    "📰 Дайджест: 09:00 UTC\n"
                     "\n"
                     "Используй /help для списка команд."
                 ),
